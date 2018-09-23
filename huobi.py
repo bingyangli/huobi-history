@@ -3,36 +3,9 @@ import gzip
 import time
 import json
 import csv
-
+import datetime
 import pymongo
 from pipelines import MongoDBPipeline
-
-
-global globalTime
-# 获取历史数据起始时间
-globalTime = 1512057600
-#1506787200
-
-
-
-def loop_data(o, k=''):
-    global json_ob, c_line
-    if isinstance(o, dict):
-        for key, value in o.items():
-            if (k == ''):
-                loop_data(value, key)
-            else:
-                loop_data(value, k + '.' + key)
-    elif isinstance(o, list):
-        for ov in o:
-            loop_data(ov, k)
-    else:
-        if not k in json_ob:
-            json_ob[k] = {}
-        json_ob[k][c_line] = o
-
-
-
 
 
 def write_csv(title, rows, csv_file_name):
@@ -41,55 +14,79 @@ def write_csv(title, rows, csv_file_name):
         writer.writerows(rows)
 
 
-def json_to_csv(object_list):
-    global json_ob, c_line
-    json_ob = {}
-    c_line = 0
+def json_to_mongo(conn,object_list,syb,period):
+    
+    
+    
+   
     for ov in object_list:
-        loop_data(ov)
-        c_line += 1
-    title, rows = get_title_rows(json_ob)
+        temp_id=ov.pop('id')
+        ov['_id'] = syb+"-"+str(temp_id)
+        ov['date']=datetime.datetime.utcfromtimestamp(temp_id)      
+        ov['symbol']=syb
+        ov['period']=period
+        conn.process_item(ov,col)
+
+def ws_reconnection(ws,tradeStr):
+    
+           
+    ws.send(tradeStr)
+    compressData = ws.recv()
+    if compressData != '':
+        result = gzip.decompress(compressData).decode('utf-8')
+        if syb not in result:
+            result = ws_reconnection(ws,tradeStr)
+        print(tradeStr)
+        print(result)
+
+        f=0                      
+    else:
+        print("正在重新连接")
+        ws = create_connection("wss://api.huobi.br.com/ws")
+        result = ws_reconnection(ws,tradeStr)
+        f=0
+    
+    return result
 
 
-global count
-count = 0
-global x
-x = globalTime
-interval = 18000
 if __name__ == '__main__':
+    
     server = '192.168.0.103'
     port = 27017
     db = "huobi"
     name = ''
     passwd = ''
-    col = '1day'    
+    col = 'kline'    
+    conn = MongoDBPipeline(server, port, db, name, passwd, col)    
     
-    while (1):
-        try:
-            ws = create_connection("wss://api.huobi.br.com/ws")
-            # ws = create_connection("wss://api.huobipro.com/ws")
-
-            while (1):
+    timestamp2 = datetime.datetime.now()
+    currenttime = int(timestamp2.strftime("%s"))
+    
+    interval = 3600*24*365
+    period="1day"
+    syb_list=["btcusdt","bchusdt","ethusdt","etcusdt","ltcusdt","eosusdt","adausdt","xrpusdt","dashusdt","omgusdt","iotausdt","zecusdt","steemusdt","hb10usdt","ontusdt","paiusdt","iostusdt","btmusdt","ocnusdt","zilusdt","ruffusdt","socusdt","dtausdt","iostusdt","ctxcusdt","elfusdt","trxusdt","itcusdt","actusdt","vetusdt","neousdt","wiccusdt","nasusdt","qtumusdt","elausdt","btsusdt","thetausdt","smtusdt","letusdt","cvcusdt","cmtusdt","hcusdt","mdsusdt","bixusdt","storjusdt","sntusdt","xemusdt","gntusdt"]
+    #syb_list=["actusdt"]
+    
+    
+ 
+    try:
+        ws = create_connection("wss://api.huobi.br.com/ws")
+        # ws = create_connection("wss://api.huobipro.com/ws")
+        for syb in syb_list:
+            print(syb)
+            globalTime = 1512057600
+            x = globalTime    
+            count = 0
+            while (globalTime< currenttime):
                 
-                tradeStr = """{"req": "market.zecusdt.kline.1day","id": "id10", "from": """ + str(
-                    globalTime) + """, "to":""" + str(1533536947) + """ }"""
-                ws.send(tradeStr)
-                compressData = ws.recv()
-                if compressData != '':
-                    result = gzip.decompress(compressData).decode('utf-8')
-                    f=0
+                if globalTime+interval <= currenttime:
+                    tradeStr = '{"req": "market.'+syb+'.kline.'+period+'","id": "id10908", "from": ' + str(
+                    globalTime) + ', "to":' + str(globalTime+interval) + ' }'
                 else:
-                    print("正在重新连接")
-                    ws.connect("wss://api.huobi.br.com/ws")
-                    # ws.connect("wss://api.huobipro.com/ws")
-
-                    globalTime = x + (interval * (count + 1))
-                    tradeStr2 = """{"req": "market.zecusdt.kline.1day","id": "id10", "from": """ + str(
-                        globalTime) + """, "to":""" + str((globalTime + interval)) + """ }"""
-                    ws.send(tradeStr2)
-                    compressData = ws.recv()
-                    result = gzip.decompress(compressData).decode('utf-8')
-
+                    tradeStr = '{"req": "market.'+syb+'.kline.'+period+'","id": "id10908", "from": ' + str(
+                    globalTime) + ', "to":' + str(currenttime) + ' }'                        
+                result = ws_reconnection(ws,tradeStr)
+                
                 if result[:7] == '{"ping"':
                     ts = result[8:21]
                     pong = '{"pong":' + ts + '}'
@@ -97,13 +94,16 @@ if __name__ == '__main__':
                 else:
                     resutlJson = json.loads(result)
                     data = resutlJson['data']
-                    
-                    
-                    #json_to_csv(data)
-                    count += 1
-                    
                     print(data)
-                globalTime += interval
-        except:
-            print('connect ws error,retry...')
-            break
+                    
+                    json_to_mongo(conn,data,syb,period)
+                    count += 1
+                    globalTime += interval
+                    
+            
+                
+            
+                    
+    except Exception as e:
+        print(e)
+        #break

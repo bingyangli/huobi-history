@@ -1,2 +1,3 @@
 #### huobi-history
-##### websocket 获取火币历史数据
+##### websocket get huobi.pro historical data
+Modified the original script.
